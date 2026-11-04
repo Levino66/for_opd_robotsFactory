@@ -1,0 +1,261 @@
+openapi: 3.0.3
+info:
+  title: Завод роботов — API решения команды
+  version: v1
+  description: |
+    Арена вызывает эти методы у сервиса команды. Правила, заголовки и ошибки
+    общие для всех проектов: см. раздел «Общие правила API» в спецификации проекта. Смысл полей описан там же.
+servers:
+  - url: "{baseUrl}"
+    variables:
+      baseUrl: { default: "https://team-001.example.org" }
+security:
+  - bearer: []
+paths:
+  /v1/health:
+    get:
+      summary: Проверка доступности
+      responses:
+        "200":
+          description: Жив
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties: { status: { type: string, enum: [ok] } }
+  /v1/info:
+    get:
+      summary: Сведения о решении (необязательно)
+      responses:
+        "200":
+          description: Описание
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  version: { type: string }
+                  project: { type: string, enum: [factory] }
+                  specVersion: { type: array, items: { type: string } }
+  /v1/runs/{runId}/start:
+    post:
+      summary: Начало прогона
+      parameters: [ { $ref: "#/components/parameters/runId" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Start" }
+      responses:
+        "200": { description: Принято, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+  /v1/runs/{runId}/event:
+    post:
+      summary: Событие и запрос решения
+      description: Ответ в пределах eventTimeoutMs. Идемпотентен по seq.
+      parameters: [ { $ref: "#/components/parameters/runId" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EventRequest" }
+      responses:
+        "200":
+          description: Команды (возможно, пустой список)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EventResponse" }
+  /v1/runs/{runId}/debug:
+    get:
+      summary: Мнение алгоритма (необязательно, для песочницы)
+      description: Только для отображения в песочнице; на результат не влияет. Время ответа не ограничивается жёстко.
+      parameters: [ { $ref: "#/components/parameters/runId" } ]
+      responses:
+        "200":
+          description: Оценки алгоритма
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  beliefs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        buyerId: { type: string }
+                        color: { type: string }
+                        handles: { type: boolean }
+                        low: { type: number }
+                        high: { type: number }
+                  note: { type: string }
+        "404": { description: Метод не реализован }
+  /v1/runs/{runId}/finish:
+    post:
+      summary: Конец прогона
+      parameters: [ { $ref: "#/components/parameters/runId" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Finish" }
+      responses:
+        "200": { description: Принято, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+  parameters:
+    runId: { name: runId, in: path, required: true, schema: { type: string } }
+  schemas:
+    Ok:
+      type: object
+      required: [ok]
+      properties: { ok: { type: boolean } }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties: { code: { type: string }, message: { type: string } }
+    Item:
+      type: object
+      required: [id, kind, props]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [sheet, control, body, robot] }
+        props: { type: object, additionalProperties: true }
+    Op:
+      type: object
+      required: [id, inputs, output, duration]
+      properties:
+        id: { type: string }
+        inputs: { type: array, items: { type: object, properties: { kind: { type: string }, props: { type: object } } } }
+        inherit: { type: integer, description: "Номер входа, чьи props наследует результат; поверх накладываются output.props" }
+        output: { type: object, properties: { kind: { type: string }, props: { type: object } } }
+        duration: { type: integer, minimum: 1 }
+        cost: { type: number }
+    Machine:
+      type: object
+      required: [id, ops]
+      properties:
+        id: { type: string }
+        ops: { type: array, items: { $ref: "#/components/schemas/Op" } }
+    Start:
+      type: object
+      required: [runId, mode, horizon, eventTimeoutMs, capacity, storageFee, offerFee, buyerCooldown, priceCeiling, buyers, attributes, machines]
+      properties:
+        runId: { type: string }
+        mode: { type: string, enum: [check, practice, round] }
+        horizon: { type: integer }
+        eventTimeoutMs: { type: integer }
+        idleEvery: { type: integer }
+        capacity: { type: integer }
+        storageFee: { type: object, additionalProperties: { type: number } }
+        offerFee: { type: number }
+        buyerCooldown: { type: integer }
+        priceCeiling: { type: number, description: Ни одна цена покупателя не превышает это значение }
+        buyers: { type: array, items: { type: string } }
+        attributes: { type: object, additionalProperties: { type: array, items: {} } }
+        machines: { type: array, items: { $ref: "#/components/schemas/Machine" } }
+    State:
+      type: object
+      properties:
+        cash: { type: number }
+        storage:
+          type: object
+          properties:
+            capacity: { type: integer }
+            free: { type: integer, description: "capacity − предметов на складе − работающих станков" }
+            items: { type: array, items: { $ref: "#/components/schemas/Item" } }
+        machines:
+          type: array
+          items:
+            type: object
+            properties: { id: { type: string }, busyUntil: { type: integer, nullable: true } }
+        buyers:
+          type: array
+          items:
+            type: object
+            properties: { id: { type: string }, cooldownUntil: { type: integer, nullable: true } }
+    Event:
+      oneOf:
+        - type: object
+          required: [type, item, price]
+          properties:
+            type: { type: string, enum: [supply] }
+            item: { $ref: "#/components/schemas/Item" }
+            price: { type: number }
+        - type: object
+          required: [type, machineId, opId, item]
+          properties:
+            type: { type: string, enum: [machine_done] }
+            machineId: { type: string }
+            opId: { type: string }
+            item: { $ref: "#/components/schemas/Item" }
+        - type: object
+          required: [type, buyerId, itemId, outcome]
+          properties:
+            type: { type: string, enum: [sale_result] }
+            buyerId: { type: string }
+            itemId: { type: string }
+            item: { $ref: "#/components/schemas/Item" }
+            outcome: { type: string, enum: [sold, refused] }
+            price: { type: number }
+            reason: { type: string, enum: [below_min_price, cooldown] }
+        - type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [idle] }
+    Report:
+      type: object
+      properties:
+        cmd: { type: integer, description: Номер команды в предыдущем ответе, с 0 }
+        ok: { type: boolean }
+        reason: { type: string }
+    EventRequest:
+      type: object
+      required: [seq, t, event, state]
+      properties:
+        seq: { type: integer }
+        t: { type: integer }
+        event: { $ref: "#/components/schemas/Event" }
+        state: { $ref: "#/components/schemas/State" }
+        report: { type: array, items: { $ref: "#/components/schemas/Report" } }
+    Command:
+      oneOf:
+        - type: object
+          required: [cmd, itemId]
+          properties: { cmd: { type: string, enum: [accept] }, itemId: { type: string } }
+        - type: object
+          required: [cmd, machineId, opId, itemIds]
+          properties:
+            cmd: { type: string, enum: [start] }
+            machineId: { type: string }
+            opId: { type: string }
+            itemIds: { type: array, items: { type: string } }
+        - type: object
+          required: [cmd, buyerId, itemId]
+          properties:
+            cmd: { type: string, enum: [offer] }
+            buyerId: { type: string }
+            itemId: { type: string }
+            minPrice: { type: number, minimum: 0, default: 0 }
+        - type: object
+          required: [cmd, itemId]
+          properties: { cmd: { type: string, enum: [discard] }, itemId: { type: string } }
+    EventResponse:
+      type: object
+      required: [commands]
+      properties:
+        commands: { type: array, items: { $ref: "#/components/schemas/Command" } }
+    Finish:
+      type: object
+      properties:
+        profit: { type: number }
+        sold: { type: integer }
+        refused: { type: integer }
+        buyers:
+          type: array
+          description: Образцы покупателей; раскрываются только в mode=practice
+          items: { type: object }
